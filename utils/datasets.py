@@ -155,26 +155,34 @@ class _RepeatSampler(object):
 
 
 class LoadImages:  # for inference
-    def __init__(self, path, img_size=640, stride=32, auto=True):
-        p = str(Path(path).absolute())  # os-agnostic absolute path
-        if '*' in p:
-            files = sorted(glob.glob(p, recursive=True))  # glob
-        elif os.path.isdir(p):
-            files = sorted(glob.glob(os.path.join(p, '*.*')))  # dir
-        elif os.path.isfile(p):
-            files = [p]  # files
+    def __init__(self, path, img_size=640, stride=32, auto=True, is_array=False):
+        self.is_array = is_array
+        if is_array:
+            self.array = path if isinstance(path, list) or len(path.shape) == 4 \
+                or getattr(path, "dtype", False) == "object" else [path]
+            self.nf = len(self.array)
+            videos = []
         else:
-            raise Exception(f'ERROR: {p} does not exist')
+            p = str(Path(path).absolute())  # os-agnostic absolute path
+            if '*' in p:
+                files = sorted(glob.glob(p, recursive=True))  # glob
+            elif os.path.isdir(p):
+                files = sorted(glob.glob(os.path.join(p, '*.*')))  # dir
+            elif os.path.isfile(p):
+                files = [p]  # files
+            else:
+                raise Exception(f'ERROR: {p} does not exist')
 
-        images = [x for x in files if x.split('.')[-1].lower() in IMG_FORMATS]
-        videos = [x for x in files if x.split('.')[-1].lower() in VID_FORMATS]
-        ni, nv = len(images), len(videos)
+            images = [x for x in files if x.split('.')[-1].lower() in IMG_FORMATS]
+            videos = [x for x in files if x.split('.')[-1].lower() in VID_FORMATS]
+            ni, nv = len(images), len(videos)
+            self.files = images + videos
+            self.nf = ni + nv  # number of files
+            self.video_flag = [False] * ni + [True] * nv
 
         self.img_size = img_size
         self.stride = stride
-        self.files = images + videos
-        self.nf = ni + nv  # number of files
-        self.video_flag = [False] * ni + [True] * nv
+        
         self.mode = 'image'
         self.auto = auto
         if any(videos):
@@ -191,6 +199,18 @@ class LoadImages:  # for inference
     def __next__(self):
         if self.count == self.nf:
             raise StopIteration
+
+        if self.is_array:
+            img0 = self.array[self.count]
+            self.count += 1
+            # Padded resize
+            img = letterbox(img0, self.img_size, stride=self.stride, auto=self.auto)[0]
+
+            # Convert
+            img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+            img = np.ascontiguousarray(img)
+            return "", img, img0, self.cap
+
         path = self.files[self.count]
 
         if self.video_flag[self.count]:
